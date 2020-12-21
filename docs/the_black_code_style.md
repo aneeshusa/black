@@ -138,6 +138,21 @@ with \
     ...  # backslashes and an ugly stranded colon
 ```
 
+Black handles multiline strings similarly to starting with an open bracket and ending wth a close bracket,
+so in case of the expression containing the string needing to be split,
+it can split the string to its own indented line(s), like other bracketed expressions.
+However, black special-cases some common multiline patterns to be more concise, e.g.
+
+```py3
+default_query = textwrap.dedent("""\
+    SELECT name, author_date
+    FROM blog_post
+    WHERE id = %s
+""")
+```
+
+This only applies if there aren't other 
+
 You might have noticed that closing brackets are always dedented and that a trailing
 comma is always added. Such formatting produces smaller diffs; when you add or remove an
 element, it's always just one line. Also, having the closing bracket dedented provides a

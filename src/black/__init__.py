@@ -1733,14 +1733,6 @@ class Line:
         """Generate comments that should appear directly after `leaf`."""
         return self.comments.get(id(leaf), [])
 
-    def remove_trailing_comma(self) -> None:
-        """Remove the trailing comma and moves the comments attached to it."""
-        trailing_comma = self.leaves.pop()
-        trailing_comma_comments = self.comments.pop(id(trailing_comma), [])
-        self.comments.setdefault(id(self.leaves[-1]), []).extend(
-            trailing_comma_comments
-        )
-
     def is_complex_subscript(self, leaf: Leaf) -> bool:
         """Return True iff `leaf` is part of a slice with non-trivial exprs."""
         open_lsqb = self.bracket_tracker.get_open_lsqb()
@@ -6466,13 +6458,91 @@ def is_line_short_enough(line: Line, *, line_length: int, line_str: str = "") ->
 
     Uses the provided `line_str` rendering, if any, otherwise computes a new one.
     """
+
     if not line_str:
         line_str = line_to_string(line)
-    return (
-        len(line_str) <= line_length
-        and "\n" not in line_str  # multiline strings
-        and not line.contains_standalone_comments()
-    )
+    if line.contains_standalone_comments():
+        return False
+    if "\n" not in line_str:
+        # No multi-line strings present
+        return len(line_str) <= line_length
+    else:
+        multiline_string = None
+        multiline_string_and_parents_stack = []
+        commas = []
+        new_return = False
+
+        max_level_to_update = None
+
+        # TODO: need to take into account bits from BracketTracker re: fixups for for/in, lambdas
+        # TODO: ignore trailing commas
+        for i, leaf in enumerate(line.leaves):
+            if max_level_to_update is None:
+                if leaf.bracket_depth + 1 > len(commas):
+                    commas.append(0)
+                elif leaf.bracket_depth + 1 < len(commas):
+                    had_comma = commas.pop()
+                    if (multiline_string is not None) and (
+                        multiline_string.bracket_depth == leaf.bracket_depth + 1
+                    ):
+                        assert had_comma is not None
+                        max_level_to_update = leaf.bracket_depth
+                        if had_comma:
+                            new_return = True
+                assert leaf.bracket_depth + 1 == len(commas), "bad stack tracking"
+                assert commas[-1] is not None
+                if leaf.type == token.COMMA:
+                    if (
+                        leaf.prev_sibling in [None] + multiline_string_and_parents_stack
+                        and i == len(line.leaves) - 1
+                    ):
+                        pass
+                    else:
+                        commas[-1] += 1
+            else:
+                for val in commas[max_level_to_update + 1 :]:
+                    assert val is None, "unexpected values above MLTT"
+                if leaf.bracket_depth <= max_level_to_update:
+                    assert commas[leaf.bracket_depth] is not None
+                    if leaf.type == token.COMMA:
+                        if (
+                            leaf.prev_sibling
+                            in [None] + multiline_string_and_parents_stack
+                            and i == len(line.leaves) - 1
+                        ):
+                            pass
+                        else:
+                            commas[leaf.bracket_depth] += 1
+                max_level_to_update = min(max_level_to_update, leaf.bracket_depth)
+
+            if is_multiline_string(leaf):
+                if multiline_string is not None:
+                    # >1 multiline string cannot fit on a single line
+                    return False
+                multiline_string = leaf
+                x = multiline_string
+                while str(x) in line_str:
+                    multiline_string_and_parents_stack.append(x)
+                    x = x.parent
+
+        if multiline_string is None:
+            return False
+
+        if max_level_to_update is None:
+            assert len(commas) == 1
+            if (multiline_string.bracket_depth == 0) and (commas[0]):
+                new_return |= True
+            pass
+        else:
+            # if commas != [1]:
+            for val in commas:
+                assert val is not None
+                new_return |= val
+        if new_return:
+            return False
+
+        first, *_, last = line_str.split("\n")
+        return (len(first) <= line_length) and (len(last) <= line_length)
 
 
 def can_be_split(line: Line) -> bool:
